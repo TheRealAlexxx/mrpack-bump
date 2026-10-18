@@ -205,3 +205,91 @@ def test_cli_rejects_bad_pack(tmp_path):
     result = run_cli(str(bad))
     assert result.returncode == 2
     assert "error:" in result.stderr
+
+
+# ---- migration -------------------------------------------------------------
+
+def test_pack_loaders_detects_dependency_keys():
+    assert mb.pack_loaders({"dependencies": {"minecraft": "1.21.1", "fabric-loader": "0.16.5"}}) == ["fabric"]
+    assert mb.pack_loaders({"dependencies": {"minecraft": "1.21.1", "quilt-loader": "0.26.0"}}) == ["quilt"]
+
+
+def test_migrate_swaps_loader_and_game_version():
+    index = dict(BASE_INDEX)
+    changes = mb.migrate_dependencies(
+        index, game_version="1.21.1", loaders=["neoforge"],
+        loader_versions={"neoforge": "21.1.72"})
+    deps = index["dependencies"]
+    assert "forge" not in deps
+    assert deps == {"minecraft": "1.21.1", "neoforge": "21.1.72"}
+    assert changes == [
+        "minecraft 1.20.1 -> 1.21.1",
+        "loaders forge 47.2.0 -> neoforge 21.1.72",
+    ]
+
+
+def test_migrate_maps_fabric_to_dependency_key():
+    index = dict(BASE_INDEX)
+    mb.migrate_dependencies(index, loaders=["fabric"], loader_versions={"fabric": "0.16.5"})
+    assert index["dependencies"] == {"minecraft": "1.20.1", "fabric-loader": "0.16.5"}
+
+
+def test_migrate_requires_loader_version():
+    index = dict(BASE_INDEX)
+    with pytest.raises(mb.BumpError):
+        mb.migrate_dependencies(index, loaders=["neoforge"])
+
+
+def test_migrate_noop_when_nothing_changes():
+    index = dict(BASE_INDEX)
+    assert mb.migrate_dependencies(index) == []
+    assert index["dependencies"] == BASE_INDEX["dependencies"]
+
+
+def run_cli_main(argv, client):
+    """Run main() in-process with a stubbed ModrinthClient."""
+    original = mb.ModrinthClient
+    mb.ModrinthClient = lambda *a, **k: client
+    try:
+        return mb.main(argv)
+    finally:
+        mb.ModrinthClient = original
+
+
+def test_cli_migrates_pack(tmp_path):
+    index = dict(BASE_INDEX, files=[make_entry()])
+    pack = make_pack(tmp_path, index)
+    out = tmp_path / "out.mrpack"
+    client = FakeClient({"PROJ": [make_version("V1", "1.0", "2026-01-01T00:00:00Z")]})
+    code = run_cli_main([
+        str(pack), "-o", str(out),
+        "--game-version", "1.21.1",
+        "--loader", "neoforge", "--loader-version", "neoforge=21.1.72",
+        "--quiet",
+    ], client)
+    assert code == 0
+    assert client.calls == [("PROJ", "1.21.1", ["neoforge"])]
+    with zipfile.ZipFile(out) as archive:
+        deps = json.loads(archive.read("modrinth.index.json"))["dependencies"]
+    assert deps == {"minecraft": "1.21.1", "neoforge": "21.1.72"}
+
+
+def test_cli_migration_writes_even_when_no_bumps(tmp_path):
+    index = dict(BASE_INDEX, files=[make_entry(version="V1")])
+    pack = make_pack(tmp_path, index)
+    out = tmp_path / "out.mrpack"
+    client = FakeClient({"PROJ": [make_version("V1", "1.0", "2026-01-01T00:00:00Z")]})
+    code = run_cli_main([
+        str(pack), "-o", str(out),
+        "--loader", "neoforge", "--loader-version", "neoforge=21.1.72",
+        "--quiet", "--json",
+    ], client)
+    assert code == 0
+    assert out.exists()
+
+
+def test_cli_migration_missing_loader_version_errors(tmp_path):
+    index = dict(BASE_INDEX, files=[])
+    pack = make_pack(tmp_path, index)
+    code = run_cli_main([str(pack), "--loader", "neoforge", "--quiet"], FakeClient({}))
+    assert code == 2

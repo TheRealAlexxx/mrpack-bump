@@ -20,14 +20,29 @@ import zipfile
 
 API_BASE = "https://api.modrinth.com"
 USER_AGENT = "mrpack-bump/0.1.0 (https://github.com/TheRealAlexxx/mrpack-bump)"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 CDN_VERSION_RE = re.compile(
     r"^https?://cdn\.modrinth\.com/data/(?P<project>[A-Za-z0-9]+)/versions/(?P<version>[A-Za-z0-9]+)/"
 )
 
-# loaders in a pack's dependencies that the Modrinth version filter accepts
-LOADER_KEYS = ("forge", "neoforge", "fabric", "quilt", "liteloader", "rift", "risugami")
+# pack dependency keys -> Modrinth API loader names (the version filter uses the
+# API names, while modrinth.index.json pins fabric-loader / quilt-loader)
+DEP_KEY_TO_LOADER = {
+    "forge": "forge",
+    "neoforge": "neoforge",
+    "fabric-loader": "fabric",
+    "quilt-loader": "quilt",
+    "liteloader": "liteloader",
+    "rift": "rift",
+    "risugami": "risugami",
+}
+LOADER_TO_DEP_KEY = {
+    "forge": "forge",
+    "neoforge": "neoforge",
+    "fabric": "fabric-loader",
+    "quilt": "quilt-loader",
+}
 
 
 class BumpError(Exception):
@@ -64,7 +79,7 @@ def pack_game_version(index):
 
 def pack_loaders(index):
     deps = index.get("dependencies") or {}
-    return [loader for loader in LOADER_KEYS if loader in deps]
+    return [loader for key, loader in DEP_KEY_TO_LOADER.items() if key in deps]
 
 
 def entry_project_version(entry):
@@ -173,6 +188,33 @@ def bump_entry(entry, client, game_version, loaders, channel, log):
     return "bumped"
 
 
+def migrate_dependencies(index, game_version=None, loaders=None, loader_versions=None):
+    """Rewrite the pack's dependency pins for a migration. Returns change lines."""
+    deps = dict(index.get("dependencies") or {})
+    changes = []
+    if game_version and deps.get("minecraft") != game_version:
+        changes.append("minecraft %s -> %s" % (deps.get("minecraft"), game_version))
+        deps["minecraft"] = game_version
+    if loaders is not None:
+        loader_versions = loader_versions or {}
+        old = ["%s %s" % (key, deps[key]) for key in DEP_KEY_TO_LOADER if key in deps]
+        for key in DEP_KEY_TO_LOADER:
+            deps.pop(key, None)
+        new = []
+        for loader in loaders:
+            version = loader_versions.get(loader)
+            if not version:
+                raise BumpError(
+                    "migrating to %s needs its loader version: pass --loader-version %s=VERSION"
+                    % (loader, loader))
+            dep_key = LOADER_TO_DEP_KEY.get(loader, loader)
+            deps[dep_key] = version
+            new.append("%s %s" % (dep_key, version))
+        changes.append("loaders %s -> %s" % (", ".join(old) or "none", ", ".join(new)))
+    index["dependencies"] = deps
+    return changes
+
+
 def bump_pack(index, client, game_version=None, loaders=None, channel="release", log=print):
     """Bump every updatable file entry. Returns a status tally."""
     game_version = game_version or pack_game_version(index)
@@ -204,7 +246,9 @@ def main(argv=None):
     parser.add_argument("-o", "--output", help="output .mrpack path (default: <pack>.bumped.mrpack, or the input path with --in-place)")
     parser.add_argument("--in-place", action="store_true", help="rewrite the input pack")
     parser.add_argument("--game-version", help="target a different Minecraft version than the pack's own")
-    parser.add_argument("--loader", action="append", help="override the pack's loader(s), repeatable")
+    parser.add_argument("--loader", action="append", help="migrate the pack to this loader, repeatable")
+    parser.add_argument("--loader-version", action="append", metavar="LOADER=VERSION",
+                        help="version pin for each loader given with --loader, repeatable")
     parser.add_argument("--channel", choices=list(CHANNEL_RANK), default="release",
                         help="newest channel to accept (default: release)")
     parser.add_argument("--dry-run", action="store_true", help="report only; write nothing")
@@ -215,6 +259,12 @@ def main(argv=None):
 
     log = (lambda *a: None) if args.quiet else (lambda *a: print(*a, file=sys.stderr))
     try:
+        loader_versions = {}
+        for item in args.loader_version or []:
+            if "=" not in item:
+                raise BumpError("--loader-version must be LOADER=VERSION, got %r" % item)
+            key, _, value = item.partition("=")
+            loader_versions[key.strip()] = value.strip()
         index, others = read_pack(args.pack)
         game_version = args.game_version or pack_game_version(index)
         loaders = args.loader if args.loader is not None else pack_loaders(index)
@@ -227,6 +277,16 @@ def main(argv=None):
             ",".join(loaders) or "any", len(index.get("files") or [])))
         client = ModrinthClient()
         tally = bump_pack(index, client, game_version, loaders, args.channel, log)
+        migrating = args.loader is not None or (
+            args.game_version and args.game_version != pack_game_version(index))
+        changes = migrate_dependencies(
+            index,
+            game_version=args.game_version or None,
+            loaders=args.loader,
+            loader_versions=loader_versions,
+        ) if migrating else []
+        for change in changes:
+            log("migrate  %s" % change)
     except BumpError as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 2
@@ -236,7 +296,7 @@ def main(argv=None):
         output = args.pack
     if not output:
         output = args.pack.rsplit(".mrpack", 1)[0] + ".bumped.mrpack"
-    if not args.dry_run and tally["bumped"]:
+    if not args.dry_run and (tally["bumped"] or changes):
         write_pack(output, index, others)
     elif args.dry_run:
         output = None

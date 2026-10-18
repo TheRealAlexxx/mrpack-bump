@@ -47,6 +47,16 @@ skip     tissous-zombie-pack.jar (no Modrinth download URL, cannot update)
 1 bumped, 1 already current, 1 kept (no compatible version), 1 external -> outbreak-zone.bumped.mrpack
 ```
 
+## Migrating a pack
+
+`--loader` and `--game-version` migrate the pack, not just filter versions: every mod is re-resolved against the new target and the pack's own dependency pins are rewritten so the output pack declares the new setup:
+
+```
+mrpack-bump my-forge-pack.mrpack --game-version 1.21.1 --loader neoforge --loader-version neoforge=21.1.72
+```
+
+Pass one `--loader-version LOADER=VERSION` per loader. Mods with no release for the new target are kept at their old version and listed as blocked, so you can see exactly what stops the migration. Fabric and Quilt pins are written with the dependency keys launchers expect (`fabric-loader`, `quilt-loader`).
+
 ## How it works
 
 Each file in `modrinth.index.json` links to a Modrinth CDN download,
