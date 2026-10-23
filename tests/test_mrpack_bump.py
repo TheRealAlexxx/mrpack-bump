@@ -326,3 +326,25 @@ def test_cli_pack_line_omits_missing_name_and_version(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "None" not in err
     assert "(unnamed pack)" in err
+
+
+def test_index_path_traversal_is_metadata_not_a_member(tmp_path):
+    """Pin intended behavior: entry "path" values in modrinth.index.json are
+    launcher-facing metadata. mrpack-bump never writes them as zip member
+    names - the member-name guard covers the actual archive entries - so a
+    traversal string in the index stays inside the JSON document. (Launchers
+    validate index paths at install time.)"""
+    index = {
+        "formatVersion": 1, "game": "minecraft", "versionId": "1", "name": "x",
+        "files": [{"path": "../../evil.jar", "hashes": {"sha1": "0" * 40},
+                   "downloads": []}],
+        "dependencies": {"minecraft": "1.20.1"},
+    }
+    pack = make_pack(tmp_path, index)
+    idx, others = mb.read_pack(str(pack))
+    out = tmp_path / "out.mrpack"
+    mb.write_pack(str(out), idx, others)
+    with zipfile.ZipFile(out) as z:
+        assert z.namelist() == ["modrinth.index.json"]
+        written = json.loads(z.read("modrinth.index.json"))
+    assert written["files"][0]["path"] == "../../evil.jar"  # metadata, unchanged
