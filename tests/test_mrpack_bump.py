@@ -317,3 +317,12 @@ def test_cli_missing_file_exits_2_without_traceback(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "no such file" in err
     assert "Traceback" not in err
+
+
+def test_cli_pack_line_omits_missing_name_and_version(tmp_path, capsys):
+    pack = make_pack(tmp_path, {"files": [], "dependencies": {"minecraft": "1.20.1"}})
+    code = run_cli_main([str(pack), "--dry-run"], FakeClient({}))
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "None" not in err
+    assert "(unnamed pack)" in err

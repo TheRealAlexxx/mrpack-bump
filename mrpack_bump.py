@@ -293,8 +293,11 @@ def main(argv=None):
             log("warning: the pack declares no Minecraft version; checking every game version")
         if not loaders:
             log("warning: the pack declares no loader; checking every loader")
-        log("pack: %s %s | game %s | loaders %s | %d files" % (
-            index.get("name"), index.get("versionId"), game_version or "any",
+        pack_label = " ".join(
+            part for part in (index.get("name"), index.get("versionId")) if part
+        ) or "(unnamed pack)"
+        log("pack: %s | game %s | loaders %s | %d files" % (
+            pack_label, game_version or "any",
             ",".join(loaders) or "any", len(index.get("files") or [])))
         client = ModrinthClient()
         tally = bump_pack(index, client, game_version, loaders, args.channel, log)
