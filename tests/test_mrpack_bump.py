@@ -305,3 +305,15 @@ def test_member_name_traversal_rejected(tmp_path):
         z.writestr("../../../tmp/pwned.txt", b"hi")
     with pytest.raises(mb.BumpError, match="unsafe member name"):
         mb.read_pack(pack)
+
+
+def test_read_pack_missing_file_is_a_clean_error(tmp_path):
+    with pytest.raises(mb.BumpError, match="no such file"):
+        mb.read_pack(str(tmp_path / "gone.mrpack"))
+
+
+def test_cli_missing_file_exits_2_without_traceback(tmp_path, capsys):
+    assert mb.main([str(tmp_path / "gone.mrpack")]) == 2
+    err = capsys.readouterr().err
+    assert "no such file" in err
+    assert "Traceback" not in err

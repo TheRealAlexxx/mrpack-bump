@@ -74,6 +74,8 @@ def read_pack(path):
     """Return (index dict, {name: bytes} for every other zip member)."""
     try:
         archive = zipfile.ZipFile(path)
+    except FileNotFoundError:
+        raise BumpError("no such file: %s" % path) from None
     except zipfile.BadZipFile as exc:
         raise BumpError("%s is not a valid .mrpack (zip) file" % path) from exc
     with archive:
