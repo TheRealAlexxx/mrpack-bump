@@ -49,6 +49,23 @@ class BumpError(Exception):
     pass
 
 
+def validate_member_name(name):
+    """Reject zip member names that could escape the extraction directory.
+
+    A .mrpack is a zip. Member names come from whoever built the pack, and
+    while launchers validate them, this tool re-writes packs: without a
+    check it would faithfully copy absolute paths or ../ traversal names
+    into the output pack for a naive extractor to trip over later.
+    """
+    parts = name.replace("\\", "/").split("/")
+    if (
+        name.startswith("/")
+        or (len(name) > 1 and name[1] == ":")
+        or ".." in parts
+    ):
+        raise BumpError("unsafe member name in pack: %s" % name)
+
+
 # ---------------------------------------------------------------------------
 # pack reading
 
@@ -69,6 +86,7 @@ def read_pack(path):
         others = {}
         for name in archive.namelist():
             if name != "modrinth.index.json" and not name.endswith("/"):
+                validate_member_name(name)
                 others[name] = archive.read(name)
     return index, others
 
@@ -230,6 +248,7 @@ def write_pack(path, index, others):
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("modrinth.index.json", json.dumps(index, indent=2))
         for name, data in others.items():
+            validate_member_name(name)
             archive.writestr(name, data)
 
 

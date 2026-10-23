@@ -293,3 +293,15 @@ def test_cli_migration_missing_loader_version_errors(tmp_path):
     pack = make_pack(tmp_path, index)
     code = run_cli_main([str(pack), "--loader", "neoforge", "--quiet"], FakeClient({}))
     assert code == 2
+
+
+def test_member_name_traversal_rejected(tmp_path):
+    import pytest
+    pack = tmp_path / "evil.mrpack"
+    with zipfile.ZipFile(pack, "w") as z:
+        z.writestr("modrinth.index.json", json.dumps({
+            "formatVersion": 1, "game": "minecraft", "versionId": "1",
+            "name": "x", "files": [], "dependencies": {"minecraft": "1.20.1"}}))
+        z.writestr("../../../tmp/pwned.txt", b"hi")
+    with pytest.raises(mb.BumpError, match="unsafe member name"):
+        mb.read_pack(pack)
